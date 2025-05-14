@@ -1,5 +1,3 @@
-wheel
-setuptools
 numpy==1.21.6
 pandas==1.3.5
 flask==2.0.1
