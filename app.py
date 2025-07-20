@@ -26,7 +26,7 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', 'your-groq-api-key-here')  # Set this in your environment
 
 # Apify API configuration
-APIFY_API_KEY = os.getenv('APIFY_API_KEY', 'apify_api_DAzioTzy8gewH5OU9dPaZJYyUYk9Lg0a2z83')
+APIFY_API_KEY = os.getenv('APIFY_API_KEY')
 
 @app.route('/api/analyze-sentiment', methods=['POST'])
 def analyze_sentiment_api():
