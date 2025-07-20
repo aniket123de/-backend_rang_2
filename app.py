@@ -22,14 +22,16 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Initialize Groq client
-# You can set your Groq API key as an environment variable or replace with your actual key
-GROQ_API_KEY = os.getenv('GROQ_API_KEY', 'your_groq_api_key_here')  # Replace with your Groq API key
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 
-if not GROQ_API_KEY or GROQ_API_KEY == 'your_groq_api_key_here':
+if not GROQ_API_KEY:
     logger.warning("GROQ_API_KEY not set properly. Some features may not work.")
     groq_client = None
 else:
     groq_client = Groq(api_key=GROQ_API_KEY)
+
+# Get Apify API key
+APIFY_API_KEY = os.getenv('APIFY_API_KEY')
 
 @app.route('/api/analyze-sentiment', methods=['POST'])
 def analyze_sentiment_api():
@@ -43,14 +45,20 @@ def analyze_sentiment_api():
         return jsonify({'error': 'Missing post_url parameter'}), 400
     
     post_url = data['post_url']
-    api_key = os.getenv('APIFY_API_KEY')  # Replace with your Apify API key
     
-    if not api_key or api_key == 'your_apify_api_key_here':
-        logger.error("APIFY_API_KEY not set or using placeholder value")
-        return jsonify({'error': 'APIFY API key not configured. Please set the APIFY_API_KEY environment variable.'}), 500
+    # Check if Apify API key is available
+    if not APIFY_API_KEY:
+        logger.error("APIFY_API_KEY environment variable not set")
+        return jsonify({
+            'error': 'APIFY API key not configured. Please set the APIFY_API_KEY environment variable.',
+            'debug_info': {
+                'env_vars_available': list(os.environ.keys()),
+                'apify_key_present': 'APIFY_API_KEY' in os.environ
+            }
+        }), 500
     
     try:
-        post_info, comments = extract_comments_with_apify(post_url, api_key)
+        post_info, comments = extract_comments_with_apify(post_url, APIFY_API_KEY)
         
         if isinstance(comments, str):
             logger.error("Apify error: %s", comments)
@@ -390,6 +398,18 @@ def generate_summary_data(post_info: dict, sentiment_results: list) -> dict:
         },
         "comments": sentiment_results
     }
+
+# Add a debug endpoint to check environment variables
+@app.route('/api/debug/env', methods=['GET'])
+def debug_env():
+    """Debug endpoint to check environment variables (remove in production)"""
+    return jsonify({
+        'apify_key_present': 'APIFY_API_KEY' in os.environ,
+        'groq_key_present': 'GROQ_API_KEY' in os.environ,
+        'env_vars': [key for key in os.environ.keys() if 'API' in key.upper()],
+        'apify_key_length': len(os.getenv('APIFY_API_KEY', '')) if os.getenv('APIFY_API_KEY') else 0,
+        'groq_key_length': len(os.getenv('GROQ_API_KEY', '')) if os.getenv('GROQ_API_KEY') else 0
+    })
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
