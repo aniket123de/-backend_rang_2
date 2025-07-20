@@ -34,7 +34,7 @@ def analyze_sentiment_api():
         return jsonify({'error': 'Missing post_url parameter'}), 400
     
     post_url = data['post_url']
-    api_key = "apify_api_DAzioTzy8gewH5OU9dPaZJYyUYk9Lg0a2z83"  # TODO: Replace with your Apify API key
+    api_key = os.getenv('APIFY_API_KEY') # TODO: Replace with your Apify API key
     
     try:
         post_info, comments = extract_comments_with_apify(post_url, api_key)
