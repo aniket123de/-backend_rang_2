@@ -5,13 +5,9 @@ import re
 from flask_cors import CORS
 import logging
 from requests.exceptions import RequestException
-import os
-from typing import Dict, List, Tuple, Any
 import json
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+from groq import Groq
+import os
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -21,16 +17,14 @@ CORS(app, resources={r"/api/*": {"origins": ["https://rangmanch.vercel.app", "ht
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Groq API configuration
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_API_KEY = os.getenv('GROQ_API_KEY', 'your-groq-api-key-here')  # Set this in your environment
-
-# Apify API configuration
-APIFY_API_KEY = os.getenv('APIFY_API_KEY')
+# Initialize Groq client
+# You can set your Groq API key as an environment variable or replace with your actual key
+GROQ_API_KEY = os.getenv('GROQ_API_KEY', 'your_groq_api_key_here')  # Replace with your Groq API key
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 @app.route('/api/analyze-sentiment', methods=['POST'])
 def analyze_sentiment_api():
-    """API endpoint to analyze Instagram post sentiment using Groq AI"""
+    """API endpoint to analyze Instagram post sentiment"""
     logger.debug("Received request: %s", request.get_json())
     
     data = request.get_json()
@@ -40,16 +34,15 @@ def analyze_sentiment_api():
         return jsonify({'error': 'Missing post_url parameter'}), 400
     
     post_url = data['post_url']
+    api_key = "apify_api_DAzioTzy8gewH5OU9dPaZJYyUYk9Lg0a2z83"  # TODO: Replace with your Apify API key
     
     try:
-        # Extract comments using Apify
-        post_info, comments = extract_comments_with_apify(post_url, APIFY_API_KEY)
+        post_info, comments = extract_comments_with_apify(post_url, api_key)
         
         if isinstance(comments, str):
             logger.error("Apify error: %s", comments)
             return jsonify({'error': comments}), 400
         
-        # Analyze sentiment using Groq AI
         sentiment_results = analyze_sentiment_with_groq(comments)
         summary_data = generate_summary_data(post_info, sentiment_results)
         
@@ -60,173 +53,7 @@ def analyze_sentiment_api():
         logger.error("Server error: %s", str(e))
         return jsonify({'error': 'Internal server error: ' + str(e)}), 500
 
-def analyze_sentiment_with_groq(comments: List[Dict]) -> List[Dict]:
-    """
-    Analyze sentiment of comments using Groq AI API
-    This handles Hindi text, emojis, and mixed languages better than VADER
-    """
-    if not comments or len(comments) == 0:
-        return []
-    
-    results = []
-    
-    # Process comments in batches to avoid token limits
-    batch_size = 10
-    for i in range(0, len(comments), batch_size):
-        batch_comments = comments[i:i + batch_size]
-        
-        try:
-            # Prepare the prompt for Grok
-            comment_texts = []
-            for j, comment in enumerate(batch_comments):
-                text = comment.get('text', '').strip()
-                if text:
-                    comment_texts.append(f"{j+1}. {text}")
-            
-            if not comment_texts:
-                continue
-            
-            prompt = f"""
-Analyze the sentiment of these Instagram comments. The comments may be in English, Hindi, or contain emojis and mixed languages. For each comment, provide:
-1. Sentiment: Positive, Negative, or Neutral
-2. Confidence score: 0.0 to 1.0
-3. Brief reasoning (optional)
-
-Comments to analyze:
-{chr(10).join(comment_texts)}
-
-Respond in JSON format like this:
-{{
-  "results": [
-    {{
-      "comment_number": 1,
-      "sentiment": "Positive",
-      "confidence": 0.85,
-      "reasoning": "Expresses happiness with emojis"
-    }},
-    ...
-  ]
-}}
-
-Focus on the emotional tone, context, and cultural nuances. Consider:
-- Hindi words and their emotional context
-- Emojis and their meanings
-- Sarcasm and irony
-- Cultural references
-"""
-
-            # Call Groq API
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are an expert sentiment analyst who understands multiple languages including Hindi and English, as well as emoji meanings and cultural contexts."
-                    },
-                    {
-                        "role": "user", 
-                        "content": prompt
-                    }
-                ],
-                "model": "llama-3.1-70b-versatile",
-                "stream": False,
-                "temperature": 0.1
-            }
-            
-            response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
-            
-            if response.status_code == 200:
-                groq_response = response.json()
-                content = groq_response.get('choices', [{}])[0].get('message', {}).get('content', '')
-                
-                try:
-                    # Parse JSON response from Groq
-                    sentiment_data = json.loads(content)
-                    groq_results = sentiment_data.get('results', [])
-                    
-                    # Map results back to comments
-                    for result in groq_results:
-                        comment_idx = result.get('comment_number', 1) - 1
-                        if 0 <= comment_idx < len(batch_comments):
-                            comment = batch_comments[comment_idx]
-                            sentiment = result.get('sentiment', 'Neutral').lower().capitalize()
-                            confidence = float(result.get('confidence', 0.5))
-                            
-                            # Convert confidence to compound score (-1 to 1)
-                            if sentiment == 'Positive':
-                                compound = confidence * 0.8  # Scale to 0.8 max
-                            elif sentiment == 'Negative':
-                                compound = -confidence * 0.8  # Scale to -0.8 min
-                            else:
-                                compound = 0.0
-                            
-                            analyzed_comment = {
-                                'username': comment.get('username', 'Unknown'),
-                                'text': comment.get('text', ''),
-                                'sentiment': sentiment,
-                                'compound': compound,
-                                'confidence': confidence,
-                                'positive': confidence if sentiment == 'Positive' else 0.0,
-                                'negative': confidence if sentiment == 'Negative' else 0.0,
-                                'neutral': confidence if sentiment == 'Neutral' else 0.0,
-                                'reasoning': result.get('reasoning', '')
-                            }
-                            results.append(analyzed_comment)
-                
-                except json.JSONDecodeError:
-                    logger.warning("Failed to parse Groq response as JSON, falling back to simple analysis")
-                    # Fallback to basic sentiment analysis
-                    for comment in batch_comments:
-                        results.append({
-                            'username': comment.get('username', 'Unknown'),
-                            'text': comment.get('text', ''),
-                            'sentiment': 'Neutral',
-                            'compound': 0.0,
-                            'confidence': 0.5,
-                            'positive': 0.0,
-                            'negative': 0.0,
-                            'neutral': 1.0,
-                            'reasoning': 'API parsing error'
-                        })
-            else:
-                logger.error(f"Groq API error: {response.status_code} - {response.text}")
-                # Fallback for this batch
-                for comment in batch_comments:
-                    results.append({
-                        'username': comment.get('username', 'Unknown'),
-                        'text': comment.get('text', ''),
-                        'sentiment': 'Neutral',
-                        'compound': 0.0,
-                        'confidence': 0.5,
-                        'positive': 0.0,
-                        'negative': 0.0,
-                        'neutral': 1.0,
-                        'reasoning': 'API error'
-                    })
-        
-        except Exception as e:
-            logger.error(f"Error analyzing batch {i//batch_size + 1}: {str(e)}")
-            # Fallback for this batch
-            for comment in batch_comments:
-                results.append({
-                    'username': comment.get('username', 'Unknown'),
-                    'text': comment.get('text', ''),
-                    'sentiment': 'Neutral',
-                    'compound': 0.0,
-                    'confidence': 0.5,
-                    'positive': 0.0,
-                    'negative': 0.0,
-                    'neutral': 1.0,
-                    'reasoning': 'Processing error'
-                })
-    
-    return results
-
-def extract_comments_with_apify(post_url: str, api_key: str, max_comments: int = 200) -> Tuple[Dict, List[Dict]]:
+def extract_comments_with_apify(post_url: str, api_key: str, max_comments: int = 200) -> tuple:
     """
     Extract Instagram comments using Apify API
     """
@@ -320,7 +147,158 @@ def extract_comments_with_apify(post_url: str, api_key: str, max_comments: int =
     logger.debug("Total comments extracted: %d", len(comments))
     return post_info, comments
 
-def generate_summary_data(post_info: Dict, sentiment_results: List[Dict]) -> Dict:
+def analyze_sentiment_with_groq(comments: list) -> list:
+    """
+    Analyze sentiment of comments using Groq AI API
+    Processes comments in batches for efficiency
+    """
+    if not comments or len(comments) == 0:
+        return []
+    
+    results = []
+    batch_size = 10  # Process comments in batches to avoid token limits
+    
+    for i in range(0, len(comments), batch_size):
+        batch = comments[i:i + batch_size]
+        batch_results = process_batch_with_groq(batch)
+        results.extend(batch_results)
+    
+    return results
+
+def process_batch_with_groq(batch_comments: list) -> list:
+    """
+    Process a batch of comments with Groq AI API
+    """
+    if not batch_comments:
+        return []
+    
+    # Prepare the batch for analysis
+    comment_texts = []
+    for idx, comment in enumerate(batch_comments):
+        text = comment.get('text', '').strip()
+        if text:
+            comment_texts.append(f"{idx}: {text}")
+    
+    if not comment_texts:
+        return []
+    
+    # Create the prompt for batch processing
+    prompt = f"""
+Analyze the sentiment of the following comments. Each comment is prefixed with its index number.
+
+Comments to analyze:
+{chr(10).join(comment_texts)}
+
+For each comment, provide the sentiment analysis in the following JSON format:
+{{
+    "index": <comment_index>,
+    "sentiment": "<Positive|Negative|Neutral>",
+    "compound": <float between -1 and 1>,
+    "confidence": <float between 0 and 1>,
+    "reasoning": "<brief explanation>"
+}}
+
+Rules:
+1. Handle Hindi text, English text, emojis, and mixed languages appropriately
+2. Consider cultural context and nuances
+3. compound score: -1 (most negative) to +1 (most positive)
+4. confidence: how confident you are in the analysis (0-1)
+5. Provide response as a JSON array with one object per comment
+6. If a comment is unclear or has no meaningful content, mark as "Neutral" with low confidence
+
+Respond with only the JSON array, no additional text.
+"""
+    
+    try:
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            model="llama3-8b-8192",  # or "mixtral-8x7b-32768" for better performance
+            temperature=0.3,
+            max_tokens=2000
+        )
+        
+        response_text = chat_completion.choices[0].message.content.strip()
+        logger.debug(f"Groq response: {response_text}")
+        
+        # Parse the JSON response
+        try:
+            sentiment_data = json.loads(response_text)
+            if not isinstance(sentiment_data, list):
+                sentiment_data = [sentiment_data]
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Groq response as JSON: {e}")
+            # Fallback to neutral sentiment for the batch
+            sentiment_data = [
+                {
+                    "index": idx,
+                    "sentiment": "Neutral",
+                    "compound": 0.0,
+                    "confidence": 0.5,
+                    "reasoning": "Failed to analyze"
+                }
+                for idx in range(len(batch_comments))
+            ]
+        
+        # Map results back to comments
+        results = []
+        for comment_idx, comment in enumerate(batch_comments):
+            # Find corresponding sentiment analysis
+            sentiment_result = None
+            for result in sentiment_data:
+                if result.get('index') == comment_idx:
+                    sentiment_result = result
+                    break
+            
+            if not sentiment_result:
+                # Fallback if no result found
+                sentiment_result = {
+                    "sentiment": "Neutral",
+                    "compound": 0.0,
+                    "confidence": 0.5,
+                    "reasoning": "No analysis available"
+                }
+            
+            analyzed_comment = {
+                'username': comment.get('username', 'Unknown'),
+                'text': comment.get('text', ''),
+                'compound': float(sentiment_result.get('compound', 0.0)),
+                'sentiment': sentiment_result.get('sentiment', 'Neutral'),
+                'confidence': float(sentiment_result.get('confidence', 0.5)),
+                'reasoning': sentiment_result.get('reasoning', ''),
+                # Convert compound score to positive/negative/neutral scores for compatibility
+                'positive': max(0, float(sentiment_result.get('compound', 0.0))),
+                'negative': max(0, -float(sentiment_result.get('compound', 0.0))),
+                'neutral': 1 - abs(float(sentiment_result.get('compound', 0.0)))
+            }
+            
+            results.append(analyzed_comment)
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error calling Groq API: {e}")
+        # Return neutral sentiments as fallback
+        return [
+            {
+                'username': comment.get('username', 'Unknown'),
+                'text': comment.get('text', ''),
+                'compound': 0.0,
+                'sentiment': 'Neutral',
+                'confidence': 0.0,
+                'reasoning': f'API Error: {str(e)}',
+                'positive': 0.0,
+                'negative': 0.0,
+                'neutral': 1.0
+            }
+            for comment in batch_comments
+        ]
+
+def generate_summary_data(post_info: dict, sentiment_results: list) -> dict:
     """
     Generate a detailed summary of sentiment analysis results
     """
@@ -340,7 +318,7 @@ def generate_summary_data(post_info: Dict, sentiment_results: List[Dict]) -> Dic
     neutral_pct = (neutral_count / total_comments) * 100 if total_comments > 0 else 0
     
     avg_sentiment = df['compound'].mean() if total_comments > 0 else 0
-    avg_confidence = df['confidence'].mean() if total_comments > 0 and 'confidence' in df.columns else 0
+    avg_confidence = df['confidence'].mean() if total_comments > 0 else 0
     
     sentiment_strength = "Neutral"
     if avg_sentiment > 0.15:
