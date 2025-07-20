@@ -3,5 +3,6 @@ requests==2.31.0
 numpy==1.26.4
 pandas==2.2.2
 flask-cors==4.0.0
-groq==0.4.1
+groq==0.8.0
 gunicorn==21.2.0
+httpx==0.25.0
