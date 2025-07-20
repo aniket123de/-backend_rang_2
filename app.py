@@ -8,6 +8,10 @@ from requests.exceptions import RequestException
 import json
 from groq import Groq
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -20,7 +24,12 @@ logger = logging.getLogger(__name__)
 # Initialize Groq client
 # You can set your Groq API key as an environment variable or replace with your actual key
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', 'your_groq_api_key_here')  # Replace with your Groq API key
-groq_client = Groq(api_key=GROQ_API_KEY)
+
+if not GROQ_API_KEY or GROQ_API_KEY == 'your_groq_api_key_here':
+    logger.warning("GROQ_API_KEY not set properly. Some features may not work.")
+    groq_client = None
+else:
+    groq_client = Groq(api_key=GROQ_API_KEY)
 
 @app.route('/api/analyze-sentiment', methods=['POST'])
 def analyze_sentiment_api():
@@ -34,7 +43,11 @@ def analyze_sentiment_api():
         return jsonify({'error': 'Missing post_url parameter'}), 400
     
     post_url = data['post_url']
-    api_key = os.getenv('APIFY_API_KEY') # TODO: Replace with your Apify API key
+    api_key = os.getenv('APIFY_API_KEY')  # Replace with your Apify API key
+    
+    if not api_key or api_key == 'your_apify_api_key_here':
+        logger.error("APIFY_API_KEY not set or using placeholder value")
+        return jsonify({'error': 'APIFY API key not configured. Please set the APIFY_API_KEY environment variable.'}), 500
     
     try:
         post_info, comments = extract_comments_with_apify(post_url, api_key)
@@ -171,6 +184,24 @@ def process_batch_with_groq(batch_comments: list) -> list:
     """
     if not batch_comments:
         return []
+    
+    if not groq_client:
+        logger.error("Groq client not initialized - API key missing")
+        # Return neutral sentiments as fallback
+        return [
+            {
+                'username': comment.get('username', 'Unknown'),
+                'text': comment.get('text', ''),
+                'compound': 0.0,
+                'sentiment': 'Neutral',
+                'confidence': 0.0,
+                'reasoning': 'Groq API key not configured',
+                'positive': 0.0,
+                'negative': 0.0,
+                'neutral': 1.0
+            }
+            for comment in batch_comments
+        ]
     
     # Prepare the batch for analysis
     comment_texts = []
